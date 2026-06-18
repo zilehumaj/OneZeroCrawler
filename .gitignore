@@ -1,0 +1,19 @@
+# Build folders
+bin/
+obj/
+
+# Visual Studio
+.vs/
+*.user
+*.suo
+
+# Generated crawler output
+CapturedPages/
+Reports/
+
+# Logs
+*.log
+
+# OS files
+Thumbs.db
+Desktop.ini
