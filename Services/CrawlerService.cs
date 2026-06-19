@@ -78,19 +78,41 @@ public class CrawlerService
 
                 await SavePageHtml(page, url);
 
+                int missingAltText =
+                    await CountImagesMissingAlt(page);
+
+                var linkResult =
+                    await CheckLinksAsync(page);
+
                 var result = new PageResult
                 {
                     Url = url,
-                    HttpStatus = response?.Status ?? 0,
-                    ResponseTimeMs = stopwatch.ElapsedMilliseconds,
-                    ConsoleErrors = consoleErrors
+
+                    HttpStatus =
+                response?.Status ?? 0,
+
+                    ResponseTimeMs =
+                stopwatch.ElapsedMilliseconds,
+
+                    ConsoleErrors =
+                 consoleErrors,
+
+                    MissingAltText =
+                 missingAltText,
+
+                    TotalLinks =
+                linkResult.TotalLinks,
+
+                    BrokenLinks =
+                linkResult.BrokenLinks
                 };
 
                 AssignSeverity(result);
 
                 result.Passed =
                     result.HttpStatus < 400 &&
-                    result.ConsoleErrors == 0;
+                    result.ConsoleErrors == 0 &&
+                    result.BrokenLinks == 0;
 
                 _results.Add(result);
 
@@ -160,9 +182,21 @@ public class CrawlerService
                 $"Passed: {result.Passed}");
 
             Console.WriteLine(
+                $"Missing Alt Text: {result.MissingAltText}");
+
+            Console.WriteLine(
+                $"Total Links: {result.TotalLinks}");
+
+            Console.WriteLine(
+                $"Broken Links: {result.BrokenLinks}");
+
+            Console.WriteLine(
                 new string('-', 60));
+
         }
     }
+
+    //Private Methods//
 
     private async Task<List<string>> ExtractLinks(IPage page)
     {
@@ -283,7 +317,7 @@ public class CrawlerService
         {
             result.Severity = "Critical";
         }
-        else if (result.HttpStatus >= 400)
+        else if (result.BrokenLinks > 5)
         {
             result.Severity = "High";
         }
@@ -299,9 +333,80 @@ public class CrawlerService
         {
             result.Severity = "Medium";
         }
+        else if (result.MissingAltText > 0)
+        {
+            result.Severity = "Low";
+        }
         else
         {
             result.Severity = "Low";
         }
+    }
+
+    private async Task<int> CountImagesMissingAlt(IPage page)
+    {
+        return await page.EvaluateAsync<int>(
+            @"() =>
+        {
+            const images =
+                document.querySelectorAll('img');
+
+            let count = 0;
+
+            images.forEach(img =>
+            {
+                const alt =
+                    img.getAttribute('alt');
+
+                if(!alt || alt.trim() === '')
+                {
+                    count++;
+                }
+            });
+
+            return count;
+        }");
+    }
+
+    private async Task<(int TotalLinks, int BrokenLinks)>CheckLinksAsync(IPage page)
+    {
+        var links = await page.EvaluateAsync<string[]>(
+            @"() =>
+            Array.from(
+                document.querySelectorAll('a'))
+            .map(a => a.href)");
+
+        int totalLinks = 0;
+        int brokenLinks = 0;
+
+        using HttpClient client = new();
+
+        foreach (var link in links.Distinct())
+        {
+            if (string.IsNullOrWhiteSpace(link))
+                continue;
+
+            totalLinks++;
+
+            try
+            {
+                var response =
+                    await client.SendAsync(
+                        new HttpRequestMessage(
+                            HttpMethod.Head,
+                            link));
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    brokenLinks++;
+                }
+            }
+            catch
+            {
+                brokenLinks++;
+            }
+        }
+
+        return (totalLinks, brokenLinks);
     }
 }
