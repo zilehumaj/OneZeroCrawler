@@ -1,23 +1,28 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Text;
-
+using System.Diagnostics;
 using Microsoft.Playwright;
+using OneZeroCrawler.Models;
 
 namespace OneZeroCrawler.Services;
 
 public class CrawlerService
 {
-    private readonly string _baseDomain = "onezero.com";
+    private readonly string _startUrl = "https://www.onezero.com";
+    private readonly string _allowedHost = "www.onezero.com";
     private readonly int _maxDepth = 3;
+
+    private readonly HashSet<string> _visited = new();
+    private readonly List<PageResult> _results = new();
+
+    public List<PageResult> Results => _results;
 
     public async Task CrawlAsync()
     {
-        var visited = new HashSet<string>();
-
         var queue = new Queue<(string Url, int Depth)>();
 
-        queue.Enqueue(("https://www.onezero.com", 0));
+        queue.Enqueue((_startUrl, 0));
 
         using var playwright = await Playwright.CreateAsync();
 
@@ -32,77 +37,271 @@ public class CrawlerService
         {
             var (url, depth) = queue.Dequeue();
 
-            if (visited.Contains(url))
-                continue;
-
             if (depth > _maxDepth)
                 continue;
 
-            visited.Add(url);
+            url = NormalizeUrl(url);
 
-            Console.WriteLine($"Depth:{depth} -> {url}");
+            if (_visited.Contains(url))
+                continue;
+
+            _visited.Add(url);
+
+            Console.WriteLine(
+                $"Depth {depth} | Crawling: {url}");
 
             var page = await browser.NewPageAsync();
 
             try
             {
-                await page.GotoAsync(url);
+                int consoleErrors = 0;
+
+                page.Console += (_, msg) =>
+                {
+                    if (msg.Type == "error")
+                    {
+                        consoleErrors++;
+                    }
+                };
+
+                var stopwatch = Stopwatch.StartNew();
+
+                var response = await page.GotoAsync(
+                    url,
+                    new PageGotoOptions
+                    {
+                        WaitUntil = WaitUntilState.Load,
+                        Timeout = 30000
+                    });
+
+                stopwatch.Stop();
 
                 await SavePageHtml(page, url);
 
-                var links = await ExtractLinks(page);
-
-                foreach (var link in links)
+                var result = new PageResult
                 {
-                    if (!visited.Contains(link))
+                    Url = url,
+                    HttpStatus = response?.Status ?? 0,
+                    ResponseTimeMs = stopwatch.ElapsedMilliseconds,
+                    ConsoleErrors = consoleErrors
+                };
+
+                AssignSeverity(result);
+
+                result.Passed =
+                    result.HttpStatus < 400 &&
+                    result.ConsoleErrors == 0;
+
+                _results.Add(result);
+
+                Console.WriteLine(
+                    $"Status:{result.HttpStatus} | " +
+                    $"Time:{result.ResponseTimeMs}ms | " +
+                    $"Errors:{result.ConsoleErrors}");
+
+                if (depth < _maxDepth)
+                {
+                    var links = await ExtractLinks(page);
+
+                    foreach (var link in links)
                     {
-                        queue.Enqueue((link, depth + 1));
+                        if (!_visited.Contains(link))
+                        {
+                            queue.Enqueue(
+                                (link, depth + 1));
+                        }
                     }
                 }
+
+                // Rate limiting
+                await Task.Delay(500);
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error: {url}");
+                Console.WriteLine(
+                    $"ERROR: {url}");
+
                 Console.WriteLine(ex.Message);
             }
-
-            await page.CloseAsync();
+            finally
+            {
+                await page.CloseAsync();
+            }
         }
 
         Console.WriteLine();
-        Console.WriteLine($"Total Pages Crawled: {visited.Count}");
+        Console.WriteLine(
+            $"Total Pages Crawled: {_visited.Count}");
+    }
+
+    public void PrintSummary()
+    {
+        Console.WriteLine();
+        Console.WriteLine("===== CRAWL SUMMARY =====");
+
+        foreach (var result in _results)
+        {
+            Console.WriteLine(
+                $"URL: {result.Url}");
+
+            Console.WriteLine(
+                $"Status: {result.HttpStatus}");
+
+            Console.WriteLine(
+                $"Response Time: {result.ResponseTimeMs}ms");
+
+            Console.WriteLine(
+                $"Console Errors: {result.ConsoleErrors}");
+
+            Console.WriteLine(
+                $"Severity: {result.Severity}");
+
+            Console.WriteLine(
+                $"Passed: {result.Passed}");
+
+            Console.WriteLine(
+                new string('-', 60));
+        }
     }
 
     private async Task<List<string>> ExtractLinks(IPage page)
     {
-        var links = await page.EvaluateAsync<string[]>(
+        var urls = await page.EvaluateAsync<string[]>(
             @"() =>
-        Array.from(document.querySelectorAll('a'))
-             .map(a => a.href)");
+            Array.from(document.querySelectorAll('a'))
+                 .map(a => a.href)");
 
-        return links
-            .Where(link =>
-                !string.IsNullOrWhiteSpace(link) &&
-                Uri.TryCreate(link, UriKind.Absolute, out var uri) &&
-                uri.Host.Contains(_baseDomain))
+        return urls
+            .Where(link => !string.IsNullOrWhiteSpace(link))
+            .Select(NormalizeUrl)
+            .Where(IsValidUrl)
             .Distinct()
             .ToList();
     }
 
-    private async Task SavePageHtml(IPage page, string url)
+    private bool IsValidUrl(string url)
     {
-        Directory.CreateDirectory("CapturedPages");
+        if (!Uri.TryCreate(
+            url,
+            UriKind.Absolute,
+            out var uri))
+        {
+            return false;
+        }
 
-        var html = await page.ContentAsync();
+        // Stay within onezero domain
+        if (!uri.Host.Equals(
+                _allowedHost,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        string[] excludedExtensions =
+        {
+            ".pdf",
+            ".jpg",
+            ".jpeg",
+            ".png",
+            ".gif",
+            ".svg",
+            ".css",
+            ".js",
+            ".xml",
+            ".zip"
+        };
+
+        if (excludedExtensions.Any(
+            ext => uri.AbsolutePath.EndsWith(
+                ext,
+                StringComparison.OrdinalIgnoreCase)))
+        {
+            return false;
+        }
+
+        string[] excludedPaths =
+        {
+            "/author/",
+            "/events/",
+            "/awards/"
+        };
+
+        if (excludedPaths.Any(
+            path => uri.AbsolutePath.Contains(
+                path,
+                StringComparison.OrdinalIgnoreCase)))
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    private string NormalizeUrl(string url)
+    {
+        if (!Uri.TryCreate(
+            url,
+            UriKind.Absolute,
+            out var uri))
+        {
+            return url;
+        }
+
+        return $"{uri.Scheme}://{uri.Host}{uri.AbsolutePath}"
+            .TrimEnd('/');
+    }
+
+    private async Task SavePageHtml(
+        IPage page,
+        string url)
+    {
+        Directory.CreateDirectory(
+            "CapturedPages");
 
         string fileName =
             url.Replace("https://", "")
-               .Replace("/", "_")
-               .Replace("?", "_")
-               .Replace("&", "_");
+               .Replace("/", "_");
+
+        if (string.IsNullOrWhiteSpace(fileName))
+        {
+            fileName = "homepage";
+        }
+
+        string html =
+            await page.ContentAsync();
 
         await File.WriteAllTextAsync(
-            $"CapturedPages/{fileName}.html",
+            Path.Combine(
+                "CapturedPages",
+                $"{fileName}.html"),
             html);
+    }
+
+    private void AssignSeverity(PageResult result)
+    {
+        if (result.HttpStatus >= 500)
+        {
+            result.Severity = "Critical";
+        }
+        else if (result.HttpStatus >= 400)
+        {
+            result.Severity = "High";
+        }
+        else if (result.ResponseTimeMs > 5000)
+        {
+            result.Severity = "High";
+        }
+        else if (result.ResponseTimeMs > 3000)
+        {
+            result.Severity = "Medium";
+        }
+        else if (result.ConsoleErrors > 0)
+        {
+            result.Severity = "Medium";
+        }
+        else
+        {
+            result.Severity = "Low";
+        }
     }
 }

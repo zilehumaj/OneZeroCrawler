@@ -36,5 +36,6 @@ class Program
         var crawler = new CrawlerService();
 
         await crawler.CrawlAsync();
+        crawler.PrintSummary();
     }
 }
