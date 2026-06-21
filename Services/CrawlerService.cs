@@ -11,10 +11,18 @@ public class CrawlerService
 {
     private readonly string _startUrl = "https://www.onezero.com";
     private readonly string _allowedHost = "www.onezero.com";
-    private readonly int _maxDepth = 3;
+   private readonly int _maxDepth;
+
+public CrawlerService(int maxDepth = 3)
+{
+    _maxDepth = maxDepth;
+}
 
     private readonly HashSet<string> _visited = new();
     private readonly List<PageResult> _results = new();
+    private readonly Dictionary<string, bool> _linkValidationCache = new();
+    private readonly HttpClient _httpClient = new();
+    private const int CrawlDelayMs = 500;
 
     public List<PageResult> Results => _results;
 
@@ -136,7 +144,7 @@ public class CrawlerService
                 }
 
                 // Rate limiting
-                await Task.Delay(500);
+                await Task.Delay(CrawlDelayMs);
             }
             catch (Exception ex)
             {
@@ -372,8 +380,7 @@ public class CrawlerService
     {
         var links = await page.EvaluateAsync<string[]>(
             @"() =>
-            Array.from(
-                document.querySelectorAll('a'))
+            Array.from(document.querySelectorAll('a'))
             .map(a => a.href)");
 
         int totalLinks = 0;
@@ -388,25 +395,37 @@ public class CrawlerService
 
             totalLinks++;
 
+            bool isValid;
+
+            if (_linkValidationCache.TryGetValue(link, out isValid))
+            {
+                if (!isValid)
+                    brokenLinks++;
+
+                continue;
+            }
+
             try
             {
                 var response =
-                    await client.SendAsync(
+                     await _httpClient.SendAsync(
                         new HttpRequestMessage(
                             HttpMethod.Head,
                             link));
 
-                if (!response.IsSuccessStatusCode)
-                {
-                    brokenLinks++;
-                }
+                isValid = response.IsSuccessStatusCode;
             }
             catch
             {
-                brokenLinks++;
+                isValid = false;
             }
+
+            _linkValidationCache[link] = isValid;
+
+            if (!isValid)
+                brokenLinks++;
         }
 
         return (totalLinks, brokenLinks);
-    }
+    } 
 }

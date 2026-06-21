@@ -5,37 +5,12 @@ class Program
 {
     static async Task Main(string[] args)
     {
-        using var playwright = await Playwright.CreateAsync();
+        const int CrawlDepth = 3;
 
-        await using var browser =
-            await playwright.Chromium.LaunchAsync(
-                new BrowserTypeLaunchOptions
-                {
-                    Headless = true
-                });
-
-        var page = await browser.NewPageAsync();
-
-        await page.GotoAsync("https://www.onezero.com");
-
-        Console.WriteLine(
-            $"Title: {await page.TitleAsync()}");
-
-        var html = await page.ContentAsync();
-
-        Directory.CreateDirectory("CapturedPages");
-
-        await File.WriteAllTextAsync(
-            "CapturedPages/homepage.html",
-            html);
-
-        Console.WriteLine("HTML saved successfully.");
-
-       
-
-        var crawler = new CrawlerService();
+        var crawler = new CrawlerService(CrawlDepth);
 
         await crawler.CrawlAsync();
+
         crawler.PrintSummary();
     }
 }
