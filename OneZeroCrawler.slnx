@@ -1,6 +1,7 @@
 <Solution>
   <Folder Name="/Solution Items/">
     <File Path=".gitignore" />
+    <File Path="Architecture.md" />
   </Folder>
   <Project Path="OneZeroCrawler.csproj" />
 </Solution>
