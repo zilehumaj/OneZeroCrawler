@@ -294,27 +294,30 @@ public CrawlerService(int maxDepth = 3)
     }
 
     private async Task SavePageHtml(
-        IPage page,
-        string url)
+    IPage page,
+    string url)
     {
-        Directory.CreateDirectory(
-            "CapturedPages");
+        string pagesFolder =
+            Path.Combine(
+                Directory.GetParent(AppContext.BaseDirectory)!
+                    .Parent!
+                    .Parent!
+                    .Parent!
+                    .FullName,
+                "CapturedPages");
+
+        Directory.CreateDirectory(pagesFolder);
 
         string fileName =
             url.Replace("https://", "")
                .Replace("/", "_");
-
-        if (string.IsNullOrWhiteSpace(fileName))
-        {
-            fileName = "homepage";
-        }
 
         string html =
             await page.ContentAsync();
 
         await File.WriteAllTextAsync(
             Path.Combine(
-                "CapturedPages",
+                pagesFolder,
                 $"{fileName}.html"),
             html);
     }

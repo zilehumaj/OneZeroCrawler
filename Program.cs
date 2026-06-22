@@ -12,5 +12,11 @@ class Program
         await crawler.CrawlAsync();
 
         crawler.PrintSummary();
+
+        await ReportGenerator.GenerateJsonReport(
+            crawler.Results);
+
+        await ReportGenerator.GenerateHtmlReport(
+            crawler.Results);
     }
 }
