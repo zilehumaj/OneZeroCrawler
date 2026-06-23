@@ -1,27 +1,24 @@
-# oneZero Dynamic Web Crawler & Smoke Test Tool
+## Architecture
 
-## Features
+The solution uses:
+- BFS crawling
+- Playwright browser automation
+- Health checks
+- Accessibility validation
+- JSON and HTML reporting
 
-- Crawl onezero.com to configurable depth
-- Capture page HTML
-- HTTP status validation
-- Response time monitoring
-- Console error detection
-- Accessibility checks (missing ALT text)
-- Broken link detection
-- JSON report generation
-- HTML report generation
+## Crawl Configuration
 
-## Run
+Current depth: 3
 
-dotnet build
+## Health Checks
 
-dotnet run
+- HTTP status
+- Response time
+- Console errors
+- Missing ALT text
+- Broken links
 
-## Output
+## Rate Limiting
 
-CapturedPages/
-
-Reports/report.json
-
-Reports/report.html
+500ms delay between requests.

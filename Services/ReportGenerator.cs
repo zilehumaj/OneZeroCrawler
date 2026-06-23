@@ -75,6 +75,7 @@ public static class ReportGenerator
             <th>Response Time</th>
             <th>Console Errors</th>
             <th>Missing Alt</th>
+            <th>Total Links</th>
             <th>Broken Links</th>
             <th>Severity</th>
             <th>Passed</th>
@@ -89,6 +90,7 @@ public static class ReportGenerator
             <td>{r.ResponseTimeMs}</td>
             <td>{r.ConsoleErrors}</td>
             <td>{r.MissingAltText}</td>
+            <td>{r.TotalLinks}</td>
             <td>{r.BrokenLinks}</td>
             <td>{r.Severity}</td>
             <td>{r.Passed}</td>

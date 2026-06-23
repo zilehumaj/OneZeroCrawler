@@ -78,7 +78,7 @@ public CrawlerService(int maxDepth = 3)
                     url,
                     new PageGotoOptions
                     {
-                        WaitUntil = WaitUntilState.Load,
+                        WaitUntil = WaitUntilState.DOMContentLoaded,
                         Timeout = 30000
                     });
 
@@ -389,7 +389,7 @@ public CrawlerService(int maxDepth = 3)
         int totalLinks = 0;
         int brokenLinks = 0;
 
-        using HttpClient client = new();
+        
 
         foreach (var link in links.Distinct())
         {
