@@ -11,9 +11,4 @@
     <PackageReference Include="Microsoft.Playwright" Version="1.60.0" />
   </ItemGroup>
 
-  <ItemGroup>
-    <Folder Include="CapturedPages\" />
-    <Folder Include="Reports\" />
-  </ItemGroup>
-
 </Project>

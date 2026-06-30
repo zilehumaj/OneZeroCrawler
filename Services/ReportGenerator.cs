@@ -46,6 +46,7 @@ public static class ReportGenerator
 
         Directory.CreateDirectory(reportFolder);
 
+
         var html = $@"
             <html>
             <head>
@@ -67,12 +68,21 @@ public static class ReportGenerator
 
             <h1>oneZero Crawl Report</h1>
 
+            <h2>Summary</h2>
+
+            <p>
+            Pages Crawled: {results.Count}<br/>
+            Pages Passed: {results.Count(r => r.Passed)}<br/>
+            Pages Failed: {results.Count(r => !r.Passed)}<br/>
+            Slow Pages (>3000 ms): {results.Count(r => r.ResponseTimeMs > 3000)}<br/>
+            Pages with Broken Links: {results.Count(r => r.BrokenLinks.Any())}
+            </p>
             <table>
 
             <tr>
             <th>URL</th>
             <th>Status</th>
-            <th>Response Time</th>
+            <th>Response Time (ms)</th>
             <th>Console Errors</th>
             <th>Missing Alt</th>
             <th>Total Links</th>
@@ -87,13 +97,28 @@ public static class ReportGenerator
             <tr>
             <td>{r.Url}</td>
             <td>{r.HttpStatus}</td>
-            <td>{r.ResponseTimeMs}</td>
-            <td>{r.ConsoleErrors}</td>
+           <td>{(r.ResponseTimeMs > 3000
+            ? $"{r.ResponseTimeMs} ⚠"
+            : r.ResponseTimeMs.ToString())}</td>
+            <td>
+            {(r.ConsoleErrors == 0
+                ? "None"
+                : string.Join("<br/>",
+                    r.ConsoleErrorDetails.Select(c =>
+                        $"{c.Type}: {System.Net.WebUtility.HtmlEncode(c.Message)}")))}
+            </td>
             <td>{r.MissingAltText}</td>
             <td>{r.TotalLinks}</td>
-            <td>{r.BrokenLinks}</td>
+            <td>
+            {string.Join("<hr/>",
+            r.BrokenLinks.Select(b =>
+            $@"Source: {b.SourcePage}<br/>
+            Anchor Text: {System.Net.WebUtility.HtmlEncode(b.AnchorText)}<br/>
+            Broken URL: {b.BrokenUrl}<br/>
+            Status: {b.StatusCode}"))}
+            </td>
             <td>{r.Severity}</td>
-            <td>{r.Passed}</td>
+            <td>{(r.Passed ? "PASS" : "FAIL")}</td>
             </tr>"
                 ))}
             </table>

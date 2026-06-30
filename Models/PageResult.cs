@@ -14,11 +14,13 @@ public class PageResult
 
     public int ConsoleErrors { get; set; }
 
+    public List<ConsoleErrorInfo> ConsoleErrorDetails { get; set; } = new();
+
     public int MissingAltText { get; set; }
 
     public int TotalLinks { get; set; }
 
-    public int BrokenLinks { get; set; }
+    public List<BrokenLinkInfo> BrokenLinks { get; set; } = new();
 
     public string Severity { get; set; } = "None";
 

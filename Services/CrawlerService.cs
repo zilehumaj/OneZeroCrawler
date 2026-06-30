@@ -20,7 +20,7 @@ public CrawlerService(int maxDepth = 3)
 
     private readonly HashSet<string> _visited = new();
     private readonly List<PageResult> _results = new();
-    private readonly Dictionary<string, bool> _linkValidationCache = new();
+    private readonly Dictionary<string, (bool IsValid, int StatusCode)> _linkValidationCache = new();
     private readonly HttpClient _httpClient = new();
     private const int CrawlDelayMs = 500;
 
@@ -63,12 +63,19 @@ public CrawlerService(int maxDepth = 3)
             try
             {
                 int consoleErrors = 0;
+                List<ConsoleErrorInfo> consoleErrorDetails = new();
 
                 page.Console += (_, msg) =>
                 {
                     if (msg.Type == "error")
                     {
                         consoleErrors++;
+
+                        consoleErrorDetails.Add(new ConsoleErrorInfo
+                        {
+                            Type = msg.Type,
+                            Message = msg.Text
+                        });
                     }
                 };
 
@@ -89,8 +96,7 @@ public CrawlerService(int maxDepth = 3)
                 int missingAltText =
                     await CountImagesMissingAlt(page);
 
-                var linkResult =
-                    await CheckLinksAsync(page);
+                var (totalLinks, brokenLinks) = await CheckLinksAsync(page, url);
 
                 var result = new PageResult
                 {
@@ -102,17 +108,15 @@ public CrawlerService(int maxDepth = 3)
                     ResponseTimeMs =
                 stopwatch.ElapsedMilliseconds,
 
-                    ConsoleErrors =
-                 consoleErrors,
+                    ConsoleErrorDetails = consoleErrorDetails,
+                    ConsoleErrors = consoleErrorDetails.Count,
 
                     MissingAltText =
                  missingAltText,
 
-                    TotalLinks =
-                linkResult.TotalLinks,
+                    TotalLinks = totalLinks,
 
-                    BrokenLinks =
-                linkResult.BrokenLinks
+                    BrokenLinks = brokenLinks
                 };
 
                 AssignSeverity(result);
@@ -120,7 +124,7 @@ public CrawlerService(int maxDepth = 3)
                 result.Passed =
                     result.HttpStatus < 400 &&
                     result.ConsoleErrors == 0 &&
-                    result.BrokenLinks == 0;
+                    result.BrokenLinks.Count == 0;
 
                 _results.Add(result);
 
@@ -208,18 +212,26 @@ public CrawlerService(int maxDepth = 3)
 
     private async Task<List<string>> ExtractLinks(IPage page)
     {
-        var urls = await page.EvaluateAsync<string[]>(
-            @"() =>
-            Array.from(document.querySelectorAll('a'))
-                 .map(a => a.href)");
+        var links = await page.EvaluateAsync<LinkInfo[]>(
+        @"() =>
+    Array.from(document.querySelectorAll('a'))
+    .map(a => ({
+        href: a.href,
+        anchorText:
+            a.innerText.trim() ||
+            a.getAttribute('aria-label') ||
+            a.getAttribute('title') ||
+            ''
+    }))");
 
-        return urls
-            .Where(link => !string.IsNullOrWhiteSpace(link))
-            .Select(NormalizeUrl)
+        return links
+            .Where(link => !string.IsNullOrWhiteSpace(link.Href))
+            .Select(link => NormalizeUrl(link.Href))
             .Where(IsValidUrl)
             .Distinct()
             .ToList();
     }
+
 
     private bool IsValidUrl(string url)
     {
@@ -324,29 +336,13 @@ public CrawlerService(int maxDepth = 3)
 
     private void AssignSeverity(PageResult result)
     {
-        if (result.HttpStatus >= 500)
-        {
-            result.Severity = "Critical";
-        }
-        else if (result.BrokenLinks > 5)
+        if (result.HttpStatus >= 400 || result.BrokenLinks.Count > 0)
         {
             result.Severity = "High";
         }
-        else if (result.ResponseTimeMs > 5000)
-        {
-            result.Severity = "High";
-        }
-        else if (result.ResponseTimeMs > 3000)
+        else if (result.ConsoleErrors > 0 || result.ResponseTimeMs > 3000)
         {
             result.Severity = "Medium";
-        }
-        else if (result.ConsoleErrors > 0)
-        {
-            result.Severity = "Medium";
-        }
-        else if (result.MissingAltText > 0)
-        {
-            result.Severity = "Low";
         }
         else
         {
@@ -379,54 +375,122 @@ public CrawlerService(int maxDepth = 3)
         }");
     }
 
-    private async Task<(int TotalLinks, int BrokenLinks)>CheckLinksAsync(IPage page)
+    private async Task<(int TotalLinks, List<BrokenLinkInfo> BrokenLinks)> CheckLinksAsync(
+    IPage page,
+    string sourcePage)
     {
-        var links = await page.EvaluateAsync<string[]>(
-            @"() =>
+        var links = await page.EvaluateAsync<LinkInfo[]>(
+             @"() =>
             Array.from(document.querySelectorAll('a'))
-            .map(a => a.href)");
+            .map(a => ({
+                href: a.href,
+                anchorText:
+                    a.innerText.trim() ||
+                    a.getAttribute('aria-label') ||
+                    a.getAttribute('title') ||
+                    a.querySelector('img')?.getAttribute('alt') ||
+                    a.querySelector('img')?.getAttribute('title') ||
+                    '[No Text]'
+            }))");
 
         int totalLinks = 0;
-        int brokenLinks = 0;
+        int statusCode = 0;
+        List<BrokenLinkInfo> brokenLinks = new();
 
-        
 
-        foreach (var link in links.Distinct())
+
+        foreach (var link in links
+    .GroupBy(l => l.Href)
+    .Select(g => g.First()))
         {
-            if (string.IsNullOrWhiteSpace(link))
+            if (string.IsNullOrWhiteSpace(link.Href))
                 continue;
+
+            // Ignore page anchors and non-web links
+            if (link.Href.StartsWith("#") ||
+             link.Href.StartsWith("javascript:", StringComparison.OrdinalIgnoreCase) ||
+             link.Href.StartsWith("mailto:", StringComparison.OrdinalIgnoreCase) ||
+             link.Href.StartsWith("tel:", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (!Uri.TryCreate(link.Href, UriKind.Absolute, out var uri))
+                continue;
+
+            // Ignore page fragments such as #content, #section
+             if (!string.IsNullOrEmpty(uri.Fragment))
+            { 
+                continue;
+            
+            }
+
+            // Skip external domains
+            if (!uri.Host.EndsWith("onezero.com", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
 
             totalLinks++;
 
             bool isValid;
 
-            if (_linkValidationCache.TryGetValue(link, out isValid))
+            if (_linkValidationCache.TryGetValue(link.Href, out var cached))
             {
+                isValid = cached.IsValid;
+
                 if (!isValid)
-                    brokenLinks++;
+                {
+                    brokenLinks.Add(new BrokenLinkInfo
+                    {
+                        SourcePage = sourcePage,
+                        BrokenUrl = link.Href,
+                        AnchorText = link.AnchorText,
+                        StatusCode = cached.StatusCode
+                    });
+                }
 
                 continue;
             }
 
+
+            
             try
             {
-                var response =
-                     await _httpClient.SendAsync(
-                        new HttpRequestMessage(
-                            HttpMethod.Head,
-                            link));
+                HttpResponseMessage response;
 
+                try
+                {
+                    response = await _httpClient.SendAsync(
+                        new HttpRequestMessage(HttpMethod.Head, link.Href));
+                }
+                catch
+                {
+                    response = await _httpClient.GetAsync(link.Href);
+                }
+
+                statusCode = (int)response.StatusCode;
                 isValid = response.IsSuccessStatusCode;
             }
             catch
             {
+                statusCode = 0;   // No HTTP response (timeout, DNS error, etc.)
                 isValid = false;
             }
 
-            _linkValidationCache[link] = isValid;
+            _linkValidationCache[link.Href] = (isValid, statusCode);
 
             if (!isValid)
-                brokenLinks++;
+                
+                {
+                brokenLinks.Add(new BrokenLinkInfo
+                {
+                    SourcePage = sourcePage,
+                    BrokenUrl = link.Href,
+                    AnchorText = link.AnchorText,
+                    StatusCode = statusCode
+                });
+            }
         }
 
         return (totalLinks, brokenLinks);
